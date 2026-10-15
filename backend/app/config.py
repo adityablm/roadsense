@@ -40,4 +40,4 @@ CITY_AUTHORITY = _get("CITY_AUTHORITY", "The Commissioner, Municipal Corporation
 CONTACT_EMAIL = _get("CONTACT_EMAIL")          # optional, sent to OpenStreetMap's address lookup
 
 # Which websites may call this API from a browser (comma separated).
-FRONTEND_ORIGINS = [o.strip() for o in _get("FRONTEND_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+FRONTEND_ORIGINS = [o.strip() for o in _get("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]

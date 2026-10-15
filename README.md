@@ -9,7 +9,7 @@ in English or Telugu.
 ## Structure
 - `ml/` — Colab notebook that trains the model
 - `backend/` — FastAPI + PostgreSQL/PostGIS + ONNX Runtime + Gemini
-- `frontend/` — React website (coming next)
+- `frontend/` — React + Leaflet website
 
 ## Run the backend locally (Windows PowerShell)
 ```powershell
@@ -21,4 +21,11 @@ copy .env.example .env      # then fill in .env
 python scripts/init_db.py
 uvicorn app.main:app --reload   # open http://127.0.0.1:8000/docs
 python -m pytest                # tests
+```
+
+## Run the website locally (second PowerShell window)
+```powershell
+cd frontend
+npm install
+npm run dev                     # open http://localhost:5173
 ```
