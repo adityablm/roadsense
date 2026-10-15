@@ -1,0 +1,12 @@
+# Libraries the backend needs. Install with:  pip install -r requirements.txt
+fastapi==0.143.2           # the web framework (turns Python functions into URLs)
+uvicorn==0.54.0           # the server program that runs FastAPI
+python-multipart==0.0.32   # lets FastAPI receive uploaded photos
+psycopg[binary]==3.3.6     # talks to PostgreSQL
+psycopg-pool==3.3.3        # keeps database connections ready (connection pool)
+onnxruntime==1.31.0        # runs the trained model (much lighter than PyTorch)
+numpy==2.5.4               # fast number arrays (the model's input and output)
+pillow==12.3.0             # opens, rotates and shrinks photos
+python-dotenv==1.2.4       # reads secrets from the .env file
+google-genai==2.31.0       # Google's official library for Gemini
+httpx==0.28.1              # makes web requests (address lookup)
