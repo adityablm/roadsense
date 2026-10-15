@@ -15,11 +15,15 @@ Two design choices worth explaining in an interview:
 import json
 import time
 
+import httpx
+
 from . import config
 
 LANGUAGES = {"en": "English", "te": "Telugu (తెలుగు)"}
 RETRYABLE = {429, 500, 503, 504}   # busy / rate-limited / temporary server problems
 TRIES_PER_MODEL = 2
+ATTEMPT_TIMEOUT_S = 25              # one Gemini call may take at most this long
+TOTAL_BUDGET_S = 70                 # the whole letter (all retries and fallbacks) gives up after this
 _client = None
 
 
@@ -29,7 +33,12 @@ def _get_client():
         if not config.GEMINI_API_KEY:
             raise RuntimeError("GEMINI_API_KEY is empty. Put your key in backend/.env")
         from google import genai      # imported here so the app still starts if the key is missing
-        _client = genai.Client(api_key=config.GEMINI_API_KEY)
+        from google.genai import types
+        _client = genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            # Without a time limit, a stuck request would wait forever. The library counts in milliseconds.
+            http_options=types.HttpOptions(timeout=ATTEMPT_TIMEOUT_S * 1000),
+        )
     return _client
 
 
@@ -42,13 +51,17 @@ def models_to_try() -> list[str]:
     return order
 
 
-def generate(prompt: str, temperature: float = 0.3, wait_seconds: float = 1.5) -> tuple[str, str]:
+def generate(prompt: str, temperature: float = 0.3, wait_seconds: float = 1.5,
+             budget_seconds: float = TOTAL_BUDGET_S) -> tuple[str, str]:
     """Returns (text, name of the model that answered)."""
     from google.genai import errors, types
     client = _get_client()
     problems = []
+    deadline = time.monotonic() + budget_seconds
     for model in models_to_try():
         for attempt in range(TRIES_PER_MODEL):
+            if time.monotonic() > deadline:
+                raise RuntimeError("Gemini is too slow right now. Try again in a minute. (" + "; ".join(problems) + ")")
             try:
                 response = client.models.generate_content(
                     model=model,
@@ -64,8 +77,11 @@ def generate(prompt: str, temperature: float = 0.3, wait_seconds: float = 1.5) -
                 if exc.code not in RETRYABLE:
                     raise                              # e.g. bad key: retrying won't help
                 problems.append(f"{model}: {exc.code} {exc.status}")
-                if attempt + 1 < TRIES_PER_MODEL:
-                    time.sleep(wait_seconds * (attempt + 1))
+            except (httpx.TimeoutException, TimeoutError):
+                problems.append(f"{model}: no answer within {ATTEMPT_TIMEOUT_S}s")
+                break                                  # a stuck model: go straight to the next one
+            if attempt + 1 < TRIES_PER_MODEL:
+                time.sleep(wait_seconds * (attempt + 1))
     raise RuntimeError("All Gemini models are busy right now. Try again in a minute. (" + "; ".join(problems) + ")")
 
 

@@ -129,6 +129,7 @@ export default function HotspotPanel({ id, onClose, onLoaded }) {
                 {writing === "te" ? "రాస్తోంది…" : "తెలుగులో రాయండి"}
               </button>
             </div>
+            {writing && <p className="muted">Usually takes 5–20 seconds. If the AI is busy, RoadSense tries other models, which can take up to a minute.</p>}
             {letterError && <p className="error">{letterError}</p>}
             {letter && (
               <div className="letter-out">

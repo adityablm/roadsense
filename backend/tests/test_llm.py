@@ -1,4 +1,5 @@
 """Tests for the Gemini retry/fallback logic, using a fake client (no internet needed)."""
+import httpx
 import pytest
 from google.genai import errors
 
@@ -69,3 +70,16 @@ def test_everything_busy_gives_clear_message(setup):
     setup({m: [busy(), busy()] for m in ("main-model", "backup-1", "backup-2")})
     with pytest.raises(RuntimeError, match="busy"):
         llm.generate("hi", wait_seconds=0)
+
+
+def test_stuck_model_is_skipped(setup):
+    fake = setup({"main-model": [httpx.ReadTimeout("no answer")], "backup-1": ["Letter text"]})
+    assert llm.generate("hi", wait_seconds=0) == ("Letter text", "backup-1")
+    assert fake.calls == ["main-model", "backup-1"]      # no second wait on the stuck model
+
+
+def test_gives_up_when_time_budget_is_used(setup):
+    fake = setup({"main-model": [busy(), busy()], "backup-1": ["never reached"]})
+    with pytest.raises(RuntimeError, match="too slow"):
+        llm.generate("hi", wait_seconds=0, budget_seconds=0)
+    assert fake.calls == []

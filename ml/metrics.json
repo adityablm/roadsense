@@ -1,0 +1,15 @@
+{
+  "model": "YOLO26n",
+  "train_images": 15482,
+  "val_images": 2730,
+  "mAP50": 0.528,
+  "mAP50_95": 0.2412,
+  "precision": 0.5605,
+  "recall": 0.5049,
+  "AP50_per_class": {
+    "longitudinal_crack": 0.4686,
+    "transverse_crack": 0.458,
+    "alligator_crack": 0.6819,
+    "pothole": 0.5033
+  }
+}

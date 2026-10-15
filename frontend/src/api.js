@@ -20,14 +20,16 @@ function setSlow(delta) {
   slowListeners.forEach((fn) => fn(slowRequests > 0));
 }
 
-async function request(path, options = {}) {
+async function request(path, { timeoutMs = 120000, ...options } = {}) {
   let markedSlow = false;
+  const controller = new AbortController();
+  const giveUp = setTimeout(() => controller.abort(), timeoutMs);
   const timer = setTimeout(() => {
     markedSlow = true;
     setSlow(+1);
   }, SLOW_AFTER_MS);
   try {
-    const response = await fetch(API_URL + path, options);
+    const response = await fetch(API_URL + path, { ...options, signal: controller.signal });
     const isJson = (response.headers.get("content-type") || "").includes("application/json");
     const body = isJson ? await response.json() : null;
     if (!response.ok) {
@@ -37,6 +39,9 @@ async function request(path, options = {}) {
     }
     return body;
   } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`No answer from the server after ${Math.round(timeoutMs / 1000)} seconds. Try again in a minute.`);
+    }
     if (error instanceof TypeError) {
       // fetch() itself failed: the server is off or the address is wrong.
       throw new Error(`Can't reach the RoadSense server at ${API_URL}. Is the backend running?`);
@@ -44,6 +49,7 @@ async function request(path, options = {}) {
     throw error;
   } finally {
     clearTimeout(timer);
+    clearTimeout(giveUp);
     if (markedSlow) setSlow(-1);
   }
 }
@@ -59,7 +65,8 @@ export const getHotspot = (id) => request(`/api/hotspots/${id}`);
 export const getStats = () => request("/api/stats");
 
 export function draftLetter(id, lang) {
-  return request(`/api/hotspots/${id}/complaint?lang=${lang}`, { method: "POST" });
+  // The server itself gives up on Gemini after about 70 seconds; this is a safety net on top.
+  return request(`/api/hotspots/${id}/complaint?lang=${lang}`, { method: "POST", timeoutMs: 90000 });
 }
 
 export function sendReport({ file, lat, lng }) {
