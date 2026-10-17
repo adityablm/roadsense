@@ -43,12 +43,12 @@ export default function HotspotPanel({ id, onClose, onLoaded }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function write(lang) {
+  async function write(lang, refresh = false) {
     setWriting(lang);
     setLetterError(null);
     setCopied(false);
     try {
-      const result = await draftLetter(id, lang);
+      const result = await draftLetter(id, lang, refresh);
       setLetter({ lang, text: result.letter });
       setSpot((s) => s && { ...s, status: s.status === "open" ? "complaint_drafted" : s.status });
     } catch (e) {
@@ -134,9 +134,14 @@ export default function HotspotPanel({ id, onClose, onLoaded }) {
             {letter && (
               <div className="letter-out">
                 <pre lang={letter.lang}>{letter.text}</pre>
-                <button className="btn btn-ghost" onClick={copy}>
-                  {copied ? "Copied" : "Copy letter"}
-                </button>
+                <div className="letter-buttons">
+                  <button className="btn btn-ghost" onClick={copy}>
+                    {copied ? "Copied" : "Copy letter"}
+                  </button>
+                  <button className="btn btn-ghost" disabled={!!writing} onClick={() => write(letter.lang, true)}>
+                    {writing ? "Writing…" : "Write a new version"}
+                  </button>
+                </div>
               </div>
             )}
           </section>

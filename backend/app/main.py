@@ -245,17 +245,19 @@ def complaint(hotspot_id: int, lang: str = Query("en", pattern="^(en|te)$"), ref
         return {"hotspot_id": hotspot_id, "lang": lang, "letter": row["letter"], "cached": True}
 
     address = row["address"] or geocode.reverse_geocode(row["lat"], row["lng"])
+    # Facts are phrased the way a resident would describe them, not as database fields,
+    # so the letter reads like a citizen wrote it ("I noticed...") rather than a report.
+    others = max(0, row["reporter_count"] - 1)
     facts = {
         "address": address or "not available",
         "latitude": round(row["lat"], 6),
         "longitude": round(row["lng"], 6),
         "map_link": f"https://www.openstreetmap.org/?mlat={row['lat']:.6f}&mlon={row['lng']:.6f}#map=19/{row['lat']:.6f}/{row['lng']:.6f}",
-        "damage_found": {label.replace("_", " "): n for label, n in row["damage_counts"].items()},
-        "number_of_photo_reports": row["report_count"],
-        "number_of_different_people_reporting": row["reporter_count"],
-        "first_reported": row["first_reported"].strftime("%d %B %Y"),
-        "last_reported": row["last_reported"].strftime("%d %B %Y"),
-        "severity_level": severity_level(row["severity"]),
+        "damage_seen": {label.replace("_", " "): n for label, n in row["damage_counts"].items()},
+        "first_noticed_on": row["first_reported"].strftime("%d %B %Y"),
+        "how_serious": {"severe": "serious", "moderate": "moderate", "minor": "minor"}[
+            severity_level(row["severity"])],
+        "other_residents_who_also_reported_it": others,
     }
     try:
         letter = llm.draft_complaint(facts, lang)

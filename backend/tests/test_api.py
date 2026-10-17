@@ -146,7 +146,9 @@ def test_complaint_letter_uses_facts_and_is_saved(client, monkeypatch):
     first = c.post(f"/api/hotspots/{hid}/complaint", params={"lang": "te"}).json()
     assert first == {"hotspot_id": hid, "lang": "te", "letter": "Dear Sir/Madam (te)", "cached": False}
     assert seen["facts"]["address"] == "Test Road, Hyderabad"
-    assert seen["facts"]["damage_found"] == {"pothole": 2}
+    assert seen["facts"]["damage_seen"] == {"pothole": 2}
+    assert seen["facts"]["other_residents_who_also_reported_it"] == 1   # 2 people reported it: you + 1 other
+    assert "severity" not in str(seen["facts"])                         # no internal score in the letter
 
     again = c.post(f"/api/hotspots/{hid}/complaint", params={"lang": "te"}).json()
     assert again["cached"] is True

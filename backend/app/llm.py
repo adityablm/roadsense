@@ -87,18 +87,23 @@ def generate(prompt: str, temperature: float = 0.3, wait_seconds: float = 1.5,
 
 def build_prompt(facts: dict, lang: str) -> str:
     language = LANGUAGES[lang]
-    return f"""You are helping a citizen write a short, formal complaint letter about road damage.
+    return f"""Write a short, formal complaint letter about road damage. The letter is written BY a local
+resident, in the first person ("I"), to the municipal authority.
 
 Rules:
 - Write the whole letter in {language}.
 - Address it to: {config.CITY_AUTHORITY}.
-- Use ONLY the facts in the JSON below. Do not invent names, phone numbers, reference numbers,
-  laws, accident reports or anything else that is not in the facts.
-- Mention the location (address if given, and the coordinates with the map link),
-  the types and counts of damage, how many separate reports and people, and the dates.
-- Politely request inspection and repair, and mention the safety risk to road users in general terms.
+- Write as the resident who saw the damage: for example "I noticed ..." or "I would like to report ...".
+  Never use phrases like "according to records", "photo reports", "the system", "the database" or "detections".
+- Describe the damage in plain words (for example "two cracks running across the road", "a pothole").
+- Say where it is: the address if given, plus the coordinates and the map link.
+- Say when it was first noticed, using first_noticed_on.
+- If other_residents_who_also_reported_it is more than 0, add ONE sentence saying that number of other
+  residents have also reported this spot through the RoadSense app. If it is 0, do not mention other people.
+- Use ONLY these facts. Do not invent names, phone numbers, reference numbers, laws, accidents or injuries.
+- Politely request inspection and repair, mentioning the risk to road users in general terms.
 - End with placeholders for the sender: [Your Name], [Your Phone], [Date].
-- Keep it under 250 words. Plain text only, no markdown.
+- Keep it under 200 words. Plain text only, no markdown.
 
 Facts:
 {json.dumps(facts, ensure_ascii=False, indent=2)}

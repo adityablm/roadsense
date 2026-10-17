@@ -64,9 +64,10 @@ export function getHotspots(bounds) {
 export const getHotspot = (id) => request(`/api/hotspots/${id}`);
 export const getStats = () => request("/api/stats");
 
-export function draftLetter(id, lang) {
+export function draftLetter(id, lang, refresh = false) {
   // The server itself gives up on Gemini after about 70 seconds; this is a safety net on top.
-  return request(`/api/hotspots/${id}/complaint?lang=${lang}`, { method: "POST", timeoutMs: 90000 });
+  return request(`/api/hotspots/${id}/complaint?lang=${lang}${refresh ? "&refresh=true" : ""}`,
+                 { method: "POST", timeoutMs: 90000 });
 }
 
 export function sendReport({ file, lat, lng }) {
