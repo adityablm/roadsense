@@ -59,6 +59,7 @@ def refresh_hotspot(cur, hotspot_id: int) -> None:
                   max(severity) AS max_sev,
                   min(created_at) AS first_at, max(created_at) AS last_at,
                   bool_and(is_demo) AS demo,
+                  bool_or(source = 'model') AS verified,
                   ST_Y(ST_Centroid(ST_Collect(location::geometry))) AS lat,
                   ST_X(ST_Centroid(ST_Collect(location::geometry))) AS lng
            FROM reports WHERE hotspot_id = %s""",
@@ -80,7 +81,7 @@ def refresh_hotspot(cur, hotspot_id: int) -> None:
                 location = {POINT},
                 report_count = %(n)s, reporter_count = %(reporters)s,
                 max_report_severity = %(max_sev)s, severity = %(sev)s,
-                damage_counts = %(damage)s, is_demo = %(demo)s,
+                damage_counts = %(damage)s, is_demo = %(demo)s, verified = %(verified)s,
                 first_reported = %(first_at)s, last_reported = %(last_at)s
             WHERE id = %(id)s""",
         {**s, "sev": hotspot_severity(s["max_sev"], s["reporters"]),

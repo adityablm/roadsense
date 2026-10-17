@@ -5,6 +5,15 @@ export const DAMAGE = {
   alligator_crack: { name: "Alligator crack", color: "#d97a06" },
   transverse_crack: { name: "Crack across the road", color: "#1f5aa6" },
   longitudinal_crack: { name: "Crack along the road", color: "#6b4fa0" },
+  other: { name: "Other problem", color: "#4a4f56" },
+};
+
+// What a person can choose when the AI missed the damage.
+export const USER_CHOICES = ["pothole", "alligator_crack", "transverse_crack", "longitudinal_crack", "other"];
+
+export const SOURCE_TEXT = {
+  user_confirmed: "The AI was unsure; a person confirmed it",
+  user: "Reported by a person; the AI didn't spot it",
 };
 
 export const LEVELS = {

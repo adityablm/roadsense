@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { draftLetter, getHotspot, imageUrl } from "../api.js";
 import DetectionImage from "../components/DetectionImage.jsx";
 import SeverityScale from "../components/SeverityScale.jsx";
-import { damageName, formatCoord, formatDate } from "../labels.js";
+import { SOURCE_TEXT, damageName, formatCoord, formatDate } from "../labels.js";
 
 const STATUS = {
   open: "Open",
@@ -83,6 +83,11 @@ export default function HotspotPanel({ id, onClose, onLoaded }) {
         <div className="panel-body">
           {spot.is_demo && <p className="demo-flag">Sample data, added to show how the app works.</p>}
           <SeverityScale score={spot.severity} level={spot.level} size="large" />
+          {!spot.verified && (
+            <p className="unverified-flag">
+              Not confirmed by the AI yet. People reported this damage, but the AI didn't spot it confidently.
+            </p>
+          )}
 
           <dl className="facts">
             <dt>Where</dt>
@@ -158,6 +163,10 @@ export default function HotspotPanel({ id, onClose, onLoaded }) {
                   />
                   <p className="muted">
                     {formatDate(r.created_at)}, severity {r.severity.toFixed(1)}
+                    {SOURCE_TEXT[r.source] && <><br />{SOURCE_TEXT[r.source]}</>}
+                    {r.detections.filter((d) => d.note).map((d, i) => (
+                      <span key={i}><br />"{d.note}"</span>
+                    ))}
                   </p>
                 </div>
               ))}

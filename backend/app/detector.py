@@ -106,7 +106,8 @@ def to_detections(boxes, scores, classes, scale, pad_x, pad_y, orig_w, orig_h) -
 
 
 class Detector:
-    def __init__(self, model_path: Path, conf_threshold: float = 0.3, threads: int = 1):
+    def __init__(self, model_path: Path, conf_threshold: float = 0.3, threads: int = 1,
+                 possible_threshold: float | None = None):
         options = ort.SessionOptions()
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1
@@ -116,12 +117,18 @@ class Detector:
         size = inp.shape[-1]
         self.size = size if isinstance(size, int) else 640    # some exports leave the size open
         self.conf_threshold = conf_threshold
+        self.possible_threshold = conf_threshold if possible_threshold is None else min(possible_threshold, conf_threshold)
 
     def detect(self, img: Image.Image) -> list[dict]:
+        """Only the confident detections."""
+        return [d for d in self.detect_all(img) if d["confidence"] >= self.conf_threshold]
+
+    def detect_all(self, img: Image.Image) -> list[dict]:
+        """Everything at least as sure as possible_threshold (confident + "possible")."""
         img = img.convert("RGB")
         square, scale, pad_x, pad_y = letterbox(img, self.size)
         x = np.asarray(square, dtype=np.float32) / 255.0      # pixels 0-255 -> 0-1
         x = x.transpose(2, 0, 1)[None]                         # (H, W, 3) -> (1, 3, H, W)
         raw = self.session.run(None, {self.input_name: x})[0]
-        boxes, scores, classes = decode_output(raw, self.conf_threshold)
+        boxes, scores, classes = decode_output(raw, self.possible_threshold)
         return to_detections(boxes, scores, classes, scale, pad_x, pad_y, *img.size)

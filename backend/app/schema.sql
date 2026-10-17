@@ -40,3 +40,11 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS reports_location_idx ON reports USING GIST (location);
 CREATE INDEX IF NOT EXISTS reports_hotspot_idx ON reports (hotspot_id);
+
+-- Added later: who decided there is damage.
+--   'model'          = the AI was confident
+--   'user_confirmed' = the AI was unsure (a "possible" detection) and the person confirmed it
+--   'user'           = the AI found nothing and the person reported the damage themselves
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'model';
+-- A hotspot is "verified" when at least one of its photos was confidently detected by the AI.
+ALTER TABLE hotspots ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT true;

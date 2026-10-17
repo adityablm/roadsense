@@ -165,3 +165,68 @@ def test_bad_inputs_are_rejected(client):
     r = c.post("/api/reports", files={"image": photo()})          # no location, no GPS in photo
     assert r.status_code == 400 and "location" in r.json()["detail"].lower()
     assert c.get("/api/hotspots/999999").status_code == 404
+
+
+# ---------------- the person decides when the AI is unsure or misses damage
+def test_possible_damage_is_only_saved_when_confirmed(client, monkeypatch):
+    c, main = client
+    weak = [{"class_id": 3, "label": "pothole", "confidence": 0.2, "box": [0.1, 0.5, 0.4, 0.8]}]
+    monkeypatch.setattr(main.detector, "detect_all", lambda img: weak)
+    first = post(c, 13.0, 80.0, "erin")
+    assert not first["damage_found"] and first["report_id"] is None
+    assert first["possible_detections"] == weak
+
+    r = c.post("/api/reports", files={"image": photo()},
+               data={"lat": "13.0", "lng": "80.0", "reporter_id": "erin", "accept_possible": "true"})
+    body = r.json()
+    assert body["damage_found"] and body["source"] == "user_confirmed"
+    h = c.get(f"/api/hotspots/{body['hotspot_id']}").json()
+    assert h["verified"] is False and h["reports"][0]["source"] == "user_confirmed"
+
+
+def test_person_can_report_what_the_ai_missed(client, monkeypatch):
+    c, main = client
+    monkeypatch.setattr(main.detector, "detect_all", lambda img: [])
+    nothing = post(c, 14.0, 81.0, "frank")
+    assert not nothing["damage_found"] and nothing["possible_detections"] == []
+
+    # "Other" needs a description
+    r = c.post("/api/reports", files={"image": photo()},
+               data={"lat": "14.0", "lng": "81.0", "reporter_id": "frank", "user_label": "other"})
+    assert r.status_code == 400
+    r = c.post("/api/reports", files={"image": photo()},
+               data={"lat": "14.0", "lng": "81.0", "reporter_id": "frank", "user_label": "other",
+                     "user_note": "  sunken manhole <script>alert(1)</script>\n near bus stop " + "x" * 200})
+    body = r.json()
+    assert body["damage_found"] and body["source"] == "user"
+    note = body["detections"][0]["note"]
+    assert "<" not in note and "\n" not in note and len(note) <= 80
+    assert body["detections"][0]["box"] is None
+    assert body["severity"] < 4                                   # a single unconfirmed report stays minor
+
+    h = c.get(f"/api/hotspots/{body['hotspot_id']}").json()
+    assert h["verified"] is False and h["damage_counts"] == {"other": 1}
+
+    # a confident AI detection at the same spot makes it verified
+    monkeypatch.setattr(main.detector, "detect_all",
+                        lambda img: [{"class_id": 3, "label": "pothole", "confidence": 0.9, "box": [0.1, 0.5, 0.5, 0.9]}])
+    later = post(c, 14.00005, 81.00005, "gina")
+    assert later["hotspot_id"] == body["hotspot_id"]
+    assert c.get(f"/api/hotspots/{body['hotspot_id']}").json()["verified"] is True
+
+    # when the AI is confident, a person's label is ignored
+    r = c.post("/api/reports", files={"image": photo()},
+               data={"lat": "15.0", "lng": "82.0", "user_label": "dragon"})
+    assert r.status_code == 200 and r.json()["source"] == "model"
+    # when the AI finds nothing, an unknown label is rejected
+    monkeypatch.setattr(main.detector, "detect_all", lambda img: [])
+    r = c.post("/api/reports", files={"image": photo()},
+               data={"lat": "15.0", "lng": "82.0", "user_label": "dragon"})
+    assert r.status_code == 400
+
+
+def test_admin_missed_list(client):
+    c, _ = client
+    assert c.get("/api/admin/missed").status_code == 403
+    rows = c.get("/api/admin/missed", headers={"X-Admin-Token": "test-admin"}).json()
+    assert {r["source"] for r in rows} == {"user", "user_confirmed"}

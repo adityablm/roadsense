@@ -69,11 +69,18 @@ export default function MapPage({ selectedId, onSelect, onNavigate }) {
               key={h.id}
               center={[h.lat, h.lng]}
               radius={radiusFor(h.report_count)}
-              pathOptions={{
+              pathOptions={h.verified ? {
                 color: selected ? "#23262a" : "#ffffff",
                 weight: selected ? 4 : 2,
                 fillColor: color,
                 fillOpacity: 0.85,
+              } : {
+                // reported by people but not confirmed by the AI: dashed outline, light fill
+                color: selected ? "#23262a" : color,
+                weight: selected ? 4 : 3,
+                dashArray: "5 4",
+                fillColor: color,
+                fillOpacity: 0.2,
               }}
               eventHandlers={{ click: () => onSelect(h.id) }}
             >
@@ -81,6 +88,7 @@ export default function MapPage({ selectedId, onSelect, onNavigate }) {
                 {LEVELS[h.level].name}: {Object.keys(h.damage_counts).map(damageName).join(", ")}
                 <br />
                 {h.report_count} {h.report_count === 1 ? "report" : "reports"}
+                {!h.verified && <><br />Not confirmed by the AI</>}
               </Tooltip>
             </CircleMarker>
           );
@@ -94,6 +102,7 @@ export default function MapPage({ selectedId, onSelect, onNavigate }) {
           </span>
         ))}
         <small>Bigger circle, more reports</small>
+        <small>Dashed outline: reported by people, not confirmed by the AI</small>
       </aside>
 
       {error && (

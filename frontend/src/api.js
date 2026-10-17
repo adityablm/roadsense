@@ -70,12 +70,17 @@ export function draftLetter(id, lang, refresh = false) {
                  { method: "POST", timeoutMs: 90000 });
 }
 
-export function sendReport({ file, lat, lng }) {
+export function sendReport({ file, lat, lng, acceptPossible = false, userLabel = null, userNote = "" }) {
   const form = new FormData();
   form.append("image", file);
   if (lat != null && lng != null) {
     form.append("lat", String(lat));
     form.append("lng", String(lng));
+  }
+  if (acceptPossible) form.append("accept_possible", "true");
+  if (userLabel) {
+    form.append("user_label", userLabel);
+    if (userNote) form.append("user_note", userNote);
   }
   form.append("reporter_id", reporterId());
   return request("/api/reports", { method: "POST", body: form });

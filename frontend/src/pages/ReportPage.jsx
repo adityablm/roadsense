@@ -3,7 +3,7 @@ import { CircleMarker, MapContainer, TileLayer, useMapEvents } from "react-leafl
 import { sendReport } from "../api.js";
 import DetectionImage from "../components/DetectionImage.jsx";
 import SeverityScale from "../components/SeverityScale.jsx";
-import { HOME, damageName, formatCoord } from "../labels.js";
+import { HOME, SOURCE_TEXT as DECIDED_BY, USER_CHOICES, damageName, formatCoord } from "../labels.js";
 
 // Lets the person click on the small map to say where the photo was taken.
 function ClickToPin({ onPin }) {
@@ -24,6 +24,8 @@ export default function ReportPage({ onNavigate }) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [missedLabel, setMissedLabel] = useState(null);   // what the person says the AI missed
+  const [missedNote, setMissedNote] = useState("");
 
   useEffect(() => {
     if (!file) return undefined;
@@ -60,14 +62,14 @@ export default function ReportPage({ onNavigate }) {
     );
   }
 
-  async function submit(e) {
-    e.preventDefault();
+  // Sends the photo. `extra` is used for the second try: confirming "possible" damage,
+  // or reporting damage the AI missed.
+  async function send(extra = {}) {
     if (!file) return;
     setSending(true);
     setError(null);
-    setResult(null);
     try {
-      setResult(await sendReport({ file, lat: place?.lat, lng: place?.lng }));
+      setResult(await sendReport({ file, lat: place?.lat, lng: place?.lng, ...extra }));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -75,7 +77,24 @@ export default function ReportPage({ onNavigate }) {
     }
   }
 
+  function submit(e) {
+    e.preventDefault();
+    setResult(null);
+    setMissedLabel(null);
+    setMissedNote("");
+    send();
+  }
+
+  function reportMissed(e) {
+    e.preventDefault();
+    send({ userLabel: missedLabel, userNote: missedNote.trim() });
+  }
+
+  const noteNeeded = missedLabel === "other" && missedNote.trim().length < 3;
+
   function reset() {
+    setMissedLabel(null);
+    setMissedNote("");
     setFile(null);
     setPreview(null);
     setPlace(null);
@@ -147,18 +166,36 @@ export default function ReportPage({ onNavigate }) {
 
       {result && (
         <section className="result" aria-live="polite">
-          <h2>{result.damage_found ? "Damage found" : "No damage found"}</h2>
-          <DetectionImage src={preview} detections={result.detections} alt="Your photo with the damage marked" />
+          {error && <p className="error" role="alert">{error}</p>}
+          <h2>
+            {result.damage_found
+              ? (result.source === "model" ? "Damage found" : "Damage reported")
+              : result.possible_detections.length > 0 ? "Possible damage" : "No damage found"}
+          </h2>
+          <DetectionImage
+            src={preview}
+            detections={result.damage_found ? result.detections : result.possible_detections}
+            possible={!result.damage_found}
+            alt="Your photo with the damage marked"
+          />
           {result.damage_found ? (
             <>
               <SeverityScale score={result.severity} level={result.level} size="large" />
               <ul className="found-list">
                 {result.detections.map((d, i) => (
                   <li key={i}>
-                    {damageName(d.label)}, {Math.round(d.confidence * 100)}% sure
+                    {damageName(d.label)}
+                    {d.confidence != null ? `, ${Math.round(d.confidence * 100)}% sure` : ""}
+                    {d.note ? `: "${d.note}"` : ""}
                   </li>
                 ))}
               </ul>
+              {result.source !== "model" && (
+                <p className="unverified-flag">
+                  {DECIDED_BY[result.source]}. It shows on the map with a dashed outline until the AI or other
+                  people confirm it.
+                </p>
+              )}
               <p>
                 {result.merged_into_existing
                   ? "Someone already reported this spot. Your photo was added to it, which makes the report stronger."
@@ -171,13 +208,54 @@ export default function ReportPage({ onNavigate }) {
                 <button className="btn btn-ghost" onClick={reset}>Report another photo</button>
               </div>
             </>
+          ) : result.possible_detections.length > 0 ? (
+            <>
+              <p>
+                The AI isn't sure. It thinks there may be damage where the dashed box is. Is it really there?
+              </p>
+              <div className="result-actions">
+                <button className="btn btn-primary" disabled={sending} onClick={() => send({ acceptPossible: true })}>
+                  {sending ? "Saving…" : "Yes, report it"}
+                </button>
+                <button className="btn btn-ghost" disabled={sending}
+                        onClick={() => setResult({ ...result, possible_detections: [] })}>
+                  No, the boxes are wrong
+                </button>
+              </div>
+            </>
           ) : (
             <>
               <p>
-                The model didn't find potholes or cracks in this photo, so nothing was saved.
-                Try a closer photo of the road surface, taken in daylight.
+                The AI didn't find potholes or cracks in this photo. If the damage is really there,
+                tell us what it is and it will still go on the map, marked as not confirmed by the AI.
               </p>
-              <button className="btn btn-ghost" onClick={reset}>Try another photo</button>
+              <form className="missed" onSubmit={reportMissed}>
+                <fieldset>
+                  <legend>What did the AI miss?</legend>
+                  <div className="choices">
+                    {USER_CHOICES.map((label) => (
+                      <label key={label} className="choice">
+                        <input type="radio" name="missed" value={label} checked={missedLabel === label}
+                               onChange={() => setMissedLabel(label)} />
+                        <span>{damageName(label)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                {missedLabel === "other" && (
+                  <label className="missed-note">
+                    Describe it in a few words
+                    <input type="text" maxLength={80} value={missedNote} placeholder="e.g. sunken manhole cover"
+                           onChange={(e) => setMissedNote(e.target.value)} />
+                  </label>
+                )}
+                <div className="result-actions">
+                  <button type="submit" className="btn btn-primary" disabled={!missedLabel || noteNeeded || sending}>
+                    {sending ? "Saving…" : "Report it myself"}
+                  </button>
+                  <button type="button" className="btn btn-ghost" onClick={reset}>Try another photo</button>
+                </div>
+              </form>
             </>
           )}
         </section>

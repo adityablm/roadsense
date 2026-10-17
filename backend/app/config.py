@@ -26,7 +26,8 @@ ADMIN_TOKEN = _get("ADMIN_TOKEN")             # a password you invent, protects 
 
 # --- model ---------------------------------------------------------------
 MODEL_PATH = Path(_get("MODEL_PATH", str(BACKEND_DIR / "models" / "roadsense.onnx")))
-CONF_THRESHOLD = float(_get("CONF_THRESHOLD", "0.30"))   # ignore detections less sure than 30%
+CONF_THRESHOLD = float(_get("CONF_THRESHOLD", "0.30"))   # detections at least this sure are saved directly
+POSSIBLE_THRESHOLD = float(_get("POSSIBLE_THRESHOLD", "0.15"))  # 15-30% sure: shown as "possible", the person decides
 ORT_THREADS = int(_get("ORT_THREADS", "1"))              # CPU threads for the model (free servers have ~1)
 
 # --- behaviour -----------------------------------------------------------

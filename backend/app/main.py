@@ -7,6 +7,7 @@ then open http://127.0.0.1:8000/docs to try every URL in your browser.
 """
 import io
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -23,6 +24,8 @@ from .severity import report_severity, severity_level
 log = logging.getLogger("roadsense")
 detector: Detector | None = None
 
+USER_LABELS = {"pothole", "alligator_crack", "transverse_crack", "longitudinal_crack", "other"}
+NOTE_MAX = 80
 STORED_MAX_SIDE = 1280      # photos are shrunk to at most 1280 px on the long side before saving
 STORED_QUALITY = 75         # JPEG quality: small files, still looks fine
 POINT = "ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography"
@@ -33,8 +36,15 @@ async def lifespan(app: FastAPI):
     """Runs once when the server starts (before the yield) and once when it stops (after)."""
     global detector
     db.open_pool()
+    try:
+        # Creates any missing tables/columns. Safe to run every start ("IF NOT EXISTS").
+        with db.connection() as conn:
+            conn.execute((config.BACKEND_DIR / "app" / "schema.sql").read_text(encoding="utf-8"))
+    except Exception:
+        log.exception("Could not apply schema.sql")
     if config.MODEL_PATH.exists():
-        detector = Detector(config.MODEL_PATH, config.CONF_THRESHOLD, config.ORT_THREADS)
+        detector = Detector(config.MODEL_PATH, config.CONF_THRESHOLD, config.ORT_THREADS,
+                            possible_threshold=config.POSSIBLE_THRESHOLD)
         log.info("Model loaded from %s", config.MODEL_PATH)
     else:
         log.warning("No model at %s - photo analysis is off until you add it", config.MODEL_PATH)
@@ -73,6 +83,14 @@ def read_gps(img: Image.Image) -> tuple[float, float] | None:
         return None
 
 
+def clean_note(text: str | None) -> str:
+    """A person's short description, e.g. "water-filled dip near bus stop".
+    It later goes into the AI letter prompt, so it is kept short and stripped of control
+    characters and of anything that looks like markup or instructions' formatting."""
+    text = re.sub(r"[\x00-\x1f\x7f<>{}`]", " ", text or "")
+    return re.sub(r"\s+", " ", text).strip()[:NOTE_MAX]
+
+
 def compress(img: Image.Image) -> tuple[bytes, int, int]:
     small = img.copy()
     small.thumbnail((STORED_MAX_SIDE, STORED_MAX_SIDE))
@@ -92,6 +110,7 @@ def hotspot_summary(row: dict) -> dict:
         "reporter_count": row["reporter_count"],
         "damage_counts": row["damage_counts"],
         "status": row["status"],
+        "verified": row["verified"],
         "is_demo": row["is_demo"],
         "first_reported": row["first_reported"],
         "last_reported": row["last_reported"],
@@ -99,7 +118,7 @@ def hotspot_summary(row: dict) -> dict:
 
 
 HOTSPOT_COLUMNS = """id, ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng, severity,
-    report_count, reporter_count, damage_counts, status, is_demo, first_reported, last_reported"""
+    report_count, reporter_count, damage_counts, status, verified, is_demo, first_reported, last_reported"""
 
 
 # ---------------------------------------------------------------- routes
@@ -121,9 +140,19 @@ def create_report(
     lat: float | None = Form(None, description="Latitude. Optional if the photo has GPS data."),
     lng: float | None = Form(None, description="Longitude. Optional if the photo has GPS data."),
     reporter_id: str | None = Form(None, max_length=64, description="Anonymous id of the person reporting"),
+    accept_possible: bool = Form(False, description="Person confirms the AI's low-confidence ('possible') damage"),
+    user_label: str | None = Form(None, description="AI found nothing; person reports this damage type themselves"),
+    user_note: str | None = Form(None, max_length=300, description="Short description (needed when user_label is 'other')"),
     is_demo: bool = Form(False),
 ):
-    """Analyse one photo. If damage is found, save it and merge it into a hotspot."""
+    """Analyse one photo. If damage is found, save it and merge it into a hotspot.
+
+    The AI is not the final judge (its recall is about 50%):
+    - confident detections (>= CONF_THRESHOLD) are saved directly;
+    - weak ones (POSSIBLE_THRESHOLD..CONF_THRESHOLD) are returned as "possible" and only saved
+      if the person sends the photo again with accept_possible=true;
+    - if the AI finds nothing, the person can report the damage type themselves (user_label).
+    Person-decided reports are marked, and their hotspot shows as "not confirmed by the AI"."""
     if detector is None:
         raise HTTPException(503, "The model is not loaded yet (models/roadsense.onnx is missing).")
 
@@ -146,10 +175,28 @@ def create_report(
     if not (-90 <= lat <= 90 and -180 <= lng <= 180):
         raise HTTPException(400, "Latitude/longitude are out of range.")
 
-    detections = detector.detect(img)
+    found = detector.detect_all(img)
+    confident = [d for d in found if d["confidence"] >= config.CONF_THRESHOLD]
+    possible = [d for d in found if d["confidence"] < config.CONF_THRESHOLD]
+    detections, source = confident, "model"
+    if not confident:
+        if accept_possible and possible:
+            detections, source = [{**d, "possible": True} for d in possible], "user_confirmed"
+        elif user_label:
+            if user_label not in USER_LABELS:
+                raise HTTPException(400, "Unknown damage type.")
+            note = clean_note(user_note)
+            if user_label == "other" and len(note) < 3:
+                raise HTTPException(400, "Please describe the problem in a few words.")
+            detections = [{"class_id": None, "label": user_label, "confidence": None, "box": None,
+                           **({"note": note} if note else {})}]
+            source = "user"
+
     result = {
         "damage_found": bool(detections),
         "detections": detections,
+        "possible_detections": [] if confident else possible,
+        "source": source,
         "severity": 0.0,
         "level": "none",
         "lat": lat,
@@ -167,11 +214,11 @@ def create_report(
     with db.connection() as conn:
         row = conn.execute(
             f"""INSERT INTO reports (location, reporter_id, image_jpeg, image_width, image_height,
-                                     detections, severity, is_demo)
-                VALUES ({POINT}, %(reporter)s, %(jpeg)s, %(w)s, %(h)s, %(det)s, %(sev)s, %(demo)s)
+                                     detections, severity, is_demo, source)
+                VALUES ({POINT}, %(reporter)s, %(jpeg)s, %(w)s, %(h)s, %(det)s, %(sev)s, %(demo)s, %(src)s)
                 RETURNING id""",
             {"lat": lat, "lng": lng, "reporter": reporter_id, "jpeg": jpeg, "w": width, "h": height,
-             "det": Jsonb(detections), "sev": severity, "demo": is_demo},
+             "det": Jsonb(detections), "sev": severity, "demo": is_demo, "src": source},
         ).fetchone()
         hotspot_id, merged = assign_report(conn, row["id"], lat, lng, config.HOTSPOT_RADIUS_M)
 
@@ -208,7 +255,7 @@ def get_hotspot(hotspot_id: int):
         if not row:
             raise HTTPException(404, "Hotspot not found.")
         reports = conn.execute(
-            """SELECT id, severity, detections, image_width, image_height, created_at, is_demo
+            """SELECT id, severity, detections, image_width, image_height, created_at, is_demo, source
                FROM reports WHERE hotspot_id = %s ORDER BY created_at DESC""",
             (hotspot_id,),
         ).fetchall()
@@ -248,12 +295,18 @@ def complaint(hotspot_id: int, lang: str = Query("en", pattern="^(en|te)$"), ref
     # Facts are phrased the way a resident would describe them, not as database fields,
     # so the letter reads like a citizen wrote it ("I noticed...") rather than a report.
     others = max(0, row["reporter_count"] - 1)
+    with db.connection() as conn:
+        notes = [r["note"] for r in conn.execute(
+            """SELECT DISTINCT d->>'note' AS note FROM reports r, jsonb_array_elements(r.detections) d
+               WHERE r.hotspot_id = %s AND d->>'note' IS NOT NULL LIMIT 5""", (hotspot_id,)).fetchall()]
     facts = {
         "address": address or "not available",
         "latitude": round(row["lat"], 6),
         "longitude": round(row["lng"], 6),
         "map_link": f"https://www.openstreetmap.org/?mlat={row['lat']:.6f}&mlon={row['lng']:.6f}#map=19/{row['lat']:.6f}/{row['lng']:.6f}",
-        "damage_seen": {label.replace("_", " "): n for label, n in row["damage_counts"].items()},
+        "damage_seen": {("other problem" if label == "other" else label.replace("_", " ")): n
+                        for label, n in row["damage_counts"].items()},
+        "residents_descriptions_of_other_problems": [clean_note(n) for n in notes],
         "first_noticed_on": row["first_reported"].strftime("%d %B %Y"),
         "how_serious": {"severe": "serious", "moderate": "moderate", "minor": "minor"}[
             severity_level(row["severity"])],
@@ -314,3 +367,16 @@ def admin_recluster(x_admin_token: str = Header("")):
     with db.connection() as conn:
         summary = recluster(conn, config.HOTSPOT_RADIUS_M)
     return {**summary, "ran_at": datetime.now().isoformat(timespec="seconds")}
+
+
+@app.get("/api/admin/missed")
+def admin_missed(x_admin_token: str = Header(""), limit: int = Query(200, le=1000)):
+    """Photos where the AI was unsure or found nothing but a person reported damage.
+    These are exactly the photos the model is bad at, so they are the best data to label and retrain on."""
+    if not config.ADMIN_TOKEN or x_admin_token != config.ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token missing or wrong.")
+    with db.connection() as conn:
+        rows = conn.execute(
+            """SELECT id, source, detections, created_at FROM reports
+               WHERE source <> 'model' ORDER BY created_at DESC LIMIT %s""", (limit,)).fetchall()
+    return [{**r, "image_url": f"/api/reports/{r['id']}/image"} for r in rows]
