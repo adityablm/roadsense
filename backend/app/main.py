@@ -256,7 +256,6 @@ def complaint(hotspot_id: int, lang: str = Query("en", pattern="^(en|te)$"), ref
         "first_reported": row["first_reported"].strftime("%d %B %Y"),
         "last_reported": row["last_reported"].strftime("%d %B %Y"),
         "severity_level": severity_level(row["severity"]),
-        "severity_score_out_of_10": row["severity"],
     }
     try:
         letter = llm.draft_complaint(facts, lang)
