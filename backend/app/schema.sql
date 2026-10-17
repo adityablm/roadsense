@@ -48,3 +48,6 @@ CREATE INDEX IF NOT EXISTS reports_hotspot_idx ON reports (hotspot_id);
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'model';
 -- A hotspot is "verified" when at least one of its photos was confidently detected by the AI.
 ALTER TABLE hotspots ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT true;
+-- A person said "this is wrong, not damage" right after sending it. The photo is kept (it is a useful
+-- "hard negative" for retraining) but it is taken off the map and out of all counts.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS false_alarm BOOLEAN NOT NULL DEFAULT false;

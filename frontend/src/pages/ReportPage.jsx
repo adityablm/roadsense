@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { CircleMarker, MapContainer, TileLayer, useMapEvents } from "react-leaflet";
-import { sendReport } from "../api.js";
+import { markNotDamage, sendReport } from "../api.js";
 import DetectionImage from "../components/DetectionImage.jsx";
 import SeverityScale from "../components/SeverityScale.jsx";
 import { HOME, SOURCE_TEXT as DECIDED_BY, USER_CHOICES, damageName, formatCoord } from "../labels.js";
@@ -92,6 +92,19 @@ export default function ReportPage({ onNavigate }) {
 
   const noteNeeded = missedLabel === "other" && missedNote.trim().length < 3;
 
+  async function notDamage() {
+    setSending(true);
+    setError(null);
+    try {
+      await markNotDamage(result.report_id);
+      setResult({ ...result, removed: true });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSending(false);
+    }
+  }
+
   function reset() {
     setMissedLabel(null);
     setMissedNote("");
@@ -168,7 +181,7 @@ export default function ReportPage({ onNavigate }) {
         <section className="result" aria-live="polite">
           {error && <p className="error" role="alert">{error}</p>}
           <h2>
-            {result.damage_found
+            {result.removed ? "Removed from the map" : result.damage_found
               ? (result.source === "model" ? "Damage found" : "Damage reported")
               : result.possible_detections.length > 0 ? "Possible damage" : "No damage found"}
           </h2>
@@ -178,7 +191,17 @@ export default function ReportPage({ onNavigate }) {
             possible={!result.damage_found}
             alt="Your photo with the damage marked"
           />
-          {result.damage_found ? (
+          {result.removed ? (
+            <>
+              <p>
+                Thanks. This photo is off the map and out of the numbers. It's kept privately as an example of
+                a mistake, so the AI can be retrained to avoid it.
+              </p>
+              <div className="result-actions">
+                <button className="btn btn-primary" onClick={reset}>Report another photo</button>
+              </div>
+            </>
+          ) : result.damage_found ? (
             <>
               <SeverityScale score={result.severity} level={result.level} size="large" />
               <ul className="found-list">
@@ -207,6 +230,14 @@ export default function ReportPage({ onNavigate }) {
                 </button>
                 <button className="btn btn-ghost" onClick={reset}>Report another photo</button>
               </div>
+              {result.source === "model" && (
+                <p className="wrong-line">
+                  Is the AI wrong?{" "}
+                  <button className="link-btn" disabled={sending} onClick={notDamage}>
+                    {sending ? "Removing…" : "This isn't damage, remove it"}
+                  </button>
+                </p>
+              )}
             </>
           ) : result.possible_detections.length > 0 ? (
             <>

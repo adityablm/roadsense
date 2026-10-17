@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 
 from . import config, db, geocode, llm
 from .detector import Detector
-from .hotspots import assign_report, recluster
+from .hotspots import assign_report, recluster, remove_report
 from .severity import report_severity, severity_level
 
 log = logging.getLogger("roadsense")
@@ -26,6 +26,8 @@ detector: Detector | None = None
 
 USER_LABELS = {"pothole", "alligator_crack", "transverse_crack", "longitudinal_crack", "other"}
 NOTE_MAX = 80
+UNDO_MINUTES = 15            # how long after sending a person can say "this is wrong"
+MODEL_INPUT_MAX = 1600       # big photos are decoded smaller: the model only looks at 640x640 anyway
 STORED_MAX_SIDE = 1280      # photos are shrunk to at most 1280 px on the long side before saving
 STORED_QUALITY = 75         # JPEG quality: small files, still looks fine
 POINT = "ST_SetSRID(ST_MakePoint(%(lng)s, %(lat)s), 4326)::geography"
@@ -161,8 +163,12 @@ def create_report(
         raise HTTPException(413, f"Photo is larger than {config.MAX_UPLOAD_MB:g} MB.")
     try:
         original = Image.open(io.BytesIO(data))
-        gps = read_gps(original)
+        gps = read_gps(original)                                   # read GPS before shrinking
+        # A 24-megapixel JPEG needs ~70 MB per copy in memory; the free server has 512 MB in total.
+        # draft() asks the JPEG decoder for a 2x/4x/8x smaller version directly, which is far cheaper.
+        original.draft("RGB", (MODEL_INPUT_MAX, MODEL_INPUT_MAX))
         img = ImageOps.exif_transpose(original).convert("RGB")   # fixes sideways phone photos
+        img.thumbnail((MODEL_INPUT_MAX, MODEL_INPUT_MAX))
     except (UnidentifiedImageError, OSError):
         raise HTTPException(400, "That file is not a photo we can read.")
 
@@ -225,6 +231,25 @@ def create_report(
     result.update(severity=severity, level=severity_level(severity), report_id=row["id"],
                   hotspot_id=hotspot_id, merged_into_existing=merged)
     return result
+
+
+@app.post("/api/reports/{report_id}/not-damage")
+def mark_not_damage(report_id: int, reporter_id: str = Form(..., max_length=64)):
+    """The person who just sent a photo says the AI was wrong: there is no damage.
+    Only that same person (same anonymous id) can do this, and only within UNDO_MINUTES.
+    The photo is kept as a "false alarm" example for retraining, but leaves the map."""
+    with db.connection() as conn:
+        row = conn.execute(
+            """SELECT reporter_id, false_alarm, created_at > now() - make_interval(mins => %s) AS recent
+               FROM reports WHERE id = %s""", (UNDO_MINUTES, report_id)).fetchone()
+        if not row:
+            raise HTTPException(404, "Report not found.")
+        if row["false_alarm"]:
+            raise HTTPException(409, "This report was already removed.")
+        if row["reporter_id"] != reporter_id or not row["recent"]:
+            raise HTTPException(403, f"Only the person who sent this photo can remove it, within {UNDO_MINUTES} minutes.")
+        hotspot_id = remove_report(conn, report_id)
+    return {"report_id": report_id, "removed": True, "hotspot_id": hotspot_id}
 
 
 @app.get("/api/hotspots")
@@ -344,7 +369,7 @@ def stats(include_demo: bool = Query(True)):
         by_type = conn.execute(
             """SELECT d->>'label' AS label, count(*) AS n
                FROM reports r, jsonb_array_elements(r.detections) AS d
-               WHERE (%s OR NOT r.is_demo) GROUP BY 1 ORDER BY 2 DESC""",
+               WHERE (%s OR NOT r.is_demo) AND NOT r.false_alarm GROUP BY 1 ORDER BY 2 DESC""",
             (include_demo,),
         ).fetchall()
         worst = conn.execute(
@@ -371,12 +396,14 @@ def admin_recluster(x_admin_token: str = Header("")):
 
 @app.get("/api/admin/missed")
 def admin_missed(x_admin_token: str = Header(""), limit: int = Query(200, le=1000)):
-    """Photos where the AI was unsure or found nothing but a person reported damage.
+    """Photos where the AI and a person disagreed:
+    - source 'user' / 'user_confirmed': the AI missed damage or was unsure (false negatives)
+    - false_alarm = true: the AI saw damage that wasn't there (false positives, "hard negatives")
     These are exactly the photos the model is bad at, so they are the best data to label and retrain on."""
     if not config.ADMIN_TOKEN or x_admin_token != config.ADMIN_TOKEN:
         raise HTTPException(403, "Admin token missing or wrong.")
     with db.connection() as conn:
         rows = conn.execute(
-            """SELECT id, source, detections, created_at FROM reports
-               WHERE source <> 'model' ORDER BY created_at DESC LIMIT %s""", (limit,)).fetchall()
+            """SELECT id, source, false_alarm, detections, created_at FROM reports
+               WHERE source <> 'model' OR false_alarm ORDER BY created_at DESC LIMIT %s""", (limit,)).fetchall()
     return [{**r, "image_url": f"/api/reports/{r['id']}/image"} for r in rows]

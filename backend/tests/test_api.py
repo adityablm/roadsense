@@ -230,3 +230,48 @@ def test_admin_missed_list(client):
     assert c.get("/api/admin/missed").status_code == 403
     rows = c.get("/api/admin/missed", headers={"X-Admin-Token": "test-admin"}).json()
     assert {r["source"] for r in rows} == {"user", "user_confirmed"}
+
+
+def test_sender_can_mark_a_false_alarm(client):
+    c, _ = client
+    r = post(c, 16.0, 79.0, "hana")
+    hid, rid = r["hotspot_id"], r["report_id"]
+    assert c.post(f"/api/reports/{rid}/not-damage", data={"reporter_id": "someone-else"}).status_code == 403
+
+    ok = c.post(f"/api/reports/{rid}/not-damage", data={"reporter_id": "hana"})
+    assert ok.status_code == 200 and ok.json()["hotspot_id"] == hid
+    assert c.get(f"/api/hotspots/{hid}").status_code == 404          # its only report is gone, so the spot is too
+    assert c.post(f"/api/reports/{rid}/not-damage", data={"reporter_id": "hana"}).status_code == 409
+
+    rows = c.get("/api/admin/missed", headers={"X-Admin-Token": "test-admin"}).json()
+    assert any(x["id"] == rid and x["false_alarm"] for x in rows)    # kept for retraining
+
+    # a recluster must not bring it back
+    c.post("/api/admin/recluster", headers={"X-Admin-Token": "test-admin"})
+    assert all(h["id"] != hid for h in c.get("/api/hotspots").json())
+
+
+def test_false_alarm_only_removes_that_photo_and_has_a_time_limit(client):
+    c, main = client
+    a = post(c, 18.0, 77.0, "ivan")
+    b = post(c, 18.00005, 77.00005, "jade")
+    assert a["hotspot_id"] == b["hotspot_id"]
+    c.post(f"/api/reports/{b['report_id']}/not-damage", data={"reporter_id": "jade"})
+    h = c.get(f"/api/hotspots/{a['hotspot_id']}").json()
+    assert h["report_count"] == 1 and h["reporter_count"] == 1        # the other person's report stays
+
+    from app import db
+    with db.connection() as conn:
+        conn.execute("UPDATE reports SET created_at = now() - interval '1 hour' WHERE id = %s", (a["report_id"],))
+    late = c.post(f"/api/reports/{a['report_id']}/not-damage", data={"reporter_id": "ivan"})
+    assert late.status_code == 403
+
+
+def test_big_photos_are_decoded_small(client):
+    c, _ = client
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (6000, 4000), (90, 90, 90)).save(buf, "JPEG")
+    r = c.post("/api/reports", files={"image": ("big.jpg", buf.getvalue(), "image/jpeg")},
+               data={"lat": "19.0", "lng": "76.0", "reporter_id": "kim"})
+    assert r.status_code == 200 and r.json()["damage_found"]

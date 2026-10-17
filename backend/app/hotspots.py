@@ -89,13 +89,28 @@ def refresh_hotspot(cur, hotspot_id: int) -> None:
     )
 
 
+def remove_report(conn, report_id: int) -> int | None:
+    """Takes one report off the map (marks it a false alarm) and recalculates its hotspot.
+    Returns the hotspot id it was in. The hotspot is deleted if no reports are left in it."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+        cur.execute("""UPDATE reports SET false_alarm = true, hotspot_id = NULL WHERE id = %s
+                       RETURNING (SELECT hotspot_id FROM reports WHERE id = %s) AS old""", (report_id, report_id))
+        row = cur.fetchone()
+        old = row["old"] if row else None
+        if old is not None:
+            refresh_hotspot(cur, old)
+            cur.execute("UPDATE hotspots SET complaint_en = NULL, complaint_te = NULL WHERE id = %s", (old,))
+        return old
+
+
 def recluster(conn, radius_m: float) -> dict:
     """Regroups every report with DBSCAN. Returns a small summary."""
     with conn.cursor() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (LOCK_KEY,))
         cur.execute("SELECT count(*) AS n FROM hotspots")
         before = cur.fetchone()["n"]
-        cur.execute("SELECT avg(ST_Y(location::geometry)) AS lat FROM reports")
+        cur.execute("SELECT avg(ST_Y(location::geometry)) AS lat FROM reports WHERE NOT false_alarm")
         avg_lat = cur.fetchone()["lat"]
         if avg_lat is None:
             return {"reports": 0, "hotspots_before": before, "hotspots_after": before}
@@ -107,7 +122,7 @@ def recluster(conn, radius_m: float) -> dict:
             """SELECT id, hotspot_id,
                       ST_ClusterDBSCAN(ST_Transform(location::geometry, 3857), eps := %s, minpoints := 1)
                           OVER () AS cluster
-               FROM reports""",
+               FROM reports WHERE NOT false_alarm""",
             (eps,),
         )
         clusters = defaultdict(list)

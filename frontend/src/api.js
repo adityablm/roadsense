@@ -86,6 +86,13 @@ export function sendReport({ file, lat, lng, acceptPossible = false, userLabel =
   return request("/api/reports", { method: "POST", body: form });
 }
 
+// "This is wrong, not damage": only works for the browser that sent the photo, shortly after.
+export function markNotDamage(reportId) {
+  const form = new FormData();
+  form.append("reporter_id", reporterId());
+  return request(`/api/reports/${reportId}/not-damage`, { method: "POST", body: form });
+}
+
 // An anonymous id for this browser, so the server can tell "3 photos from 3 people"
 // apart from "3 photos from 1 person". It is random and contains nothing personal.
 let memoryId = null;
