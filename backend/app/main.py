@@ -324,6 +324,11 @@ def complaint(hotspot_id: int, lang: str = Query("en", pattern="^(en|te)$"), ref
         notes = [r["note"] for r in conn.execute(
             """SELECT DISTINCT d->>'note' AS note FROM reports r, jsonb_array_elements(r.detections) d
                WHERE r.hotspot_id = %s AND d->>'note' IS NOT NULL LIMIT 5""", (hotspot_id,)).fetchall()]
+        # How bad the damage LOOKS = its worst photo. The hotspot score is capped below "severe"
+        # until a second person reports it; that cap is for ranking the map, not for describing the damage.
+        worst_photo = conn.execute(
+            "SELECT max(severity) AS s FROM reports WHERE hotspot_id = %s AND NOT false_alarm",
+            (hotspot_id,)).fetchone()["s"]
     facts = {
         "address": address or "not available",
         "latitude": round(row["lat"], 6),
@@ -334,7 +339,7 @@ def complaint(hotspot_id: int, lang: str = Query("en", pattern="^(en|te)$"), ref
         "residents_descriptions_of_other_problems": [clean_note(n) for n in notes],
         "first_noticed_on": row["first_reported"].strftime("%d %B %Y"),
         "how_serious": {"severe": "serious", "moderate": "moderate", "minor": "minor"}[
-            severity_level(row["severity"])],
+            severity_level(worst_photo if worst_photo is not None else row["severity"])],
         "other_residents_who_also_reported_it": others,
     }
     try:

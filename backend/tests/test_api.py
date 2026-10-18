@@ -157,6 +157,20 @@ def test_complaint_letter_uses_facts_and_is_saved(client, monkeypatch):
     assert c.post(f"/api/hotspots/{hid}/complaint", params={"lang": "fr"}).status_code == 422
 
 
+def test_letter_describes_the_damage_not_the_report_count(client, monkeypatch):
+    # dave's spot: one person, a big confident pothole. The map caps the spot below "severe"
+    # until a second person confirms it, but the letter must still call the damage serious.
+    c, main = client
+    seen = {}
+    monkeypatch.setattr(main.llm, "draft_complaint", lambda facts, lang: seen.update(facts) or "Dear Sir")
+    monkeypatch.setattr(main.geocode, "reverse_geocode", lambda lat, lng: "MG Road")
+    r = post(c, 12.971600, 77.594600, "dave")
+    h = c.get(f"/api/hotspots/{r['hotspot_id']}").json()
+    assert h["reporter_count"] == 1 and h["severity"] < 7 and r["severity"] >= 7
+    c.post(f"/api/hotspots/{r['hotspot_id']}/complaint", params={"lang": "en", "refresh": "true"})
+    assert seen["how_serious"] == "serious"
+
+
 def test_bad_inputs_are_rejected(client):
     c, _ = client
     r = c.post("/api/reports", files={"image": ("x.jpg", b"not an image", "image/jpeg")},
